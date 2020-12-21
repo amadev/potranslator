@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 
 """Main module."""
-
+import os
+import pandas as pd
 from os import listdir, makedirs
 from os.path import isfile, join, exists
 from . import polib, Translator, json
@@ -68,28 +69,34 @@ class PoTranslator:
         if target_lang not in SUPPORTED_LANGUAGES:
             raise ValueError(_('Unsupported language.'))
         untranslated = [elmt for elmt in po if elmt.msgstr == '' and not elmt.obsolete]
-        if untranslated:
+
+        if os.getenv('POTRANSLATOR_SHORT'):
+            untranslated = [i for i in untranslated
+                            if len(i.msgid.split("\n")) == 1 and
+                            "%" not in i.msgid and
+                            "$" not in i.msgid and
+                            len(i.msgid) < 100]
+
+        data_dir = os.path.expanduser("~/.potranslator")
+        t_file = f'{data_dir}/po-t.csv'
+        u_file = f'{data_dir}/po.csv'
+        if not os.path.exists(data_dir):
+            os.mkdir(data_dir)
+
+        df = pd.DataFrame()
+        df['from'] = [i.msgid for i in untranslated]
+        df['to'] = [f'=GOOGLETRANSLATE(A{i+2};"en";"{target_lang}")' for i,v in enumerate(untranslated)]
+        df.to_csv(u_file, index=False)
+
+        updated = False
+        if os.path.exists(t_file):
+            df = pd.read_csv(t_file, names=['from', 'to'])
+            trns = {k:df['to'][i]   for i, k in enumerate(df['from'])}
+            for entry in untranslated:
+                entry.msgstr = trns.get(entry.msgid, '')
+            po.save(file_name)
             updated = True
-            try:
-                translations = self.translator.translate([elmt.msgid for elmt in untranslated], src=src_lang, dest=target_lang)
-                for entry, translation in zip(untranslated, translations):
-                    entry.msgstr = translation.text
-                po.metadata['Translated-By'] = 'potranslator {0}'.format(__version__)
-                po.metadata['Last-Translator'] = 'potranslator {0}'.format(__version__)
-                po.metadata['Language'] = target_lang
-                po.metadata['PO-Revision-Date'] = str(datetime.today())
-                print(_('{0} translations for the file {1} have been succesfully retrieved').format(SUPPORTED_LANGUAGES[target_lang], file_name))
-            except JSONDecodeError as e:
-                print(_('{0} translations for the file {1} could not be retrieved').format(SUPPORTED_LANGUAGES[target_lang], file_name))
-            if auto_save:
-                po.save(file_name)
-                print(_('The file {1} has been succesfully translated in {0} and saved.').format(SUPPORTED_LANGUAGES[target_lang], file_name))
-            else:
-                print(_('The file {1} has been succesfully translated in {0}.').format(SUPPORTED_LANGUAGES[target_lang], file_name))
-            if compiled:
-                po.save_as_mofile(file_name.replace('.po', '.mo'))
-        else:
-            updated = False
+
         return po, updated
 
     def translate_all_locale(self, src_lang='auto', encoding='utf-8', auto_save=False, compiled=False):
